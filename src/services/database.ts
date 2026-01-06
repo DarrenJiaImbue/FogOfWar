@@ -1,7 +1,10 @@
 import * as SQLite from 'expo-sqlite';
-import { VisitedLocation } from '../types';
+import circle from '@turf/circle';
+import union from '@turf/union';
+import { RevealedGeometry, RevealedAreaStats } from '../types';
 
 const DATABASE_NAME = 'fog_of_war.db';
+const REVEAL_RADIUS_MILES = 0.1;
 
 let db: SQLite.SQLiteDatabase | null = null;
 
@@ -9,85 +12,158 @@ export async function initDatabase(): Promise<void> {
   db = await SQLite.openDatabaseAsync(DATABASE_NAME);
 
   await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS visited_locations (
+    CREATE TABLE IF NOT EXISTS revealed_geometry (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      geojson TEXT NOT NULL,
+      location_count INTEGER NOT NULL DEFAULT 0,
+      last_updated INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS location_history (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       latitude REAL NOT NULL,
       longitude REAL NOT NULL,
-      timestamp INTEGER NOT NULL,
-      accuracy REAL
+      timestamp INTEGER NOT NULL
     );
-
-    CREATE INDEX IF NOT EXISTS idx_lat_lon ON visited_locations (latitude, longitude);
   `);
 }
 
+export function isDatabaseReady(): boolean {
+  return db !== null;
+}
+
+/**
+ * Creates a circle polygon for a given location
+ */
+function createRevealCircle(latitude: number, longitude: number): GeoJSON.Feature<GeoJSON.Polygon> {
+  return circle([longitude, latitude], REVEAL_RADIUS_MILES, {
+    steps: 32,
+    units: 'miles',
+  });
+}
+
+/**
+ * Adds a new visited location and merges it with existing revealed geometry.
+ * Returns true if the geometry was updated, false if this location was already revealed.
+ */
 export async function addVisitedLocation(
   latitude: number,
-  longitude: number,
-  accuracy: number | null
-): Promise<number> {
+  longitude: number
+): Promise<boolean> {
   if (!db) {
     throw new Error('Database not initialized');
   }
 
   const timestamp = Date.now();
+  const newCircle = createRevealCircle(latitude, longitude);
 
-  const result = await db.runAsync(
-    'INSERT INTO visited_locations (latitude, longitude, timestamp, accuracy) VALUES (?, ?, ?, ?)',
-    [latitude, longitude, timestamp, accuracy]
+  // Get existing geometry
+  const existing = await db.getFirstAsync<{ geojson: string; location_count: number }>(
+    'SELECT geojson, location_count FROM revealed_geometry WHERE id = 1'
   );
 
-  return result.lastInsertRowId;
+  let mergedGeometry: RevealedGeometry;
+  let newLocationCount: number;
+
+  if (existing) {
+    const existingGeometry = JSON.parse(existing.geojson) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>;
+
+    // Union the new circle with existing geometry
+    // turf/union v7+ requires a FeatureCollection with at least 2 features
+    const fc: GeoJSON.FeatureCollection<GeoJSON.Polygon | GeoJSON.MultiPolygon> = {
+      type: 'FeatureCollection',
+      features: [existingGeometry, newCircle],
+    };
+    const unionResult = union(fc);
+    mergedGeometry = unionResult;
+    newLocationCount = existing.location_count + 1;
+  } else {
+    // First location - just use the circle
+    mergedGeometry = newCircle;
+    newLocationCount = 1;
+  }
+
+  // Save merged geometry
+  const geojsonStr = JSON.stringify(mergedGeometry);
+
+  await db.runAsync(
+    `INSERT INTO revealed_geometry (id, geojson, location_count, last_updated)
+     VALUES (1, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       geojson = excluded.geojson,
+       location_count = excluded.location_count,
+       last_updated = excluded.last_updated`,
+    [geojsonStr, newLocationCount, timestamp]
+  );
+
+  // Also log to history for analytics (optional, lightweight)
+  await db.runAsync(
+    'INSERT INTO location_history (latitude, longitude, timestamp) VALUES (?, ?, ?)',
+    [latitude, longitude, timestamp]
+  );
+
+  return true;
 }
 
-export async function getAllVisitedLocations(): Promise<VisitedLocation[]> {
+/**
+ * Gets the current revealed geometry for rendering
+ */
+export async function getRevealedGeometry(): Promise<RevealedGeometry> {
   if (!db) {
     throw new Error('Database not initialized');
   }
 
-  const rows = await db.getAllAsync<VisitedLocation>(
-    'SELECT id, latitude, longitude, timestamp, accuracy FROM visited_locations ORDER BY timestamp DESC'
+  const row = await db.getFirstAsync<{ geojson: string }>(
+    'SELECT geojson FROM revealed_geometry WHERE id = 1'
   );
 
-  return rows;
+  if (!row) {
+    return null;
+  }
+
+  return JSON.parse(row.geojson) as GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon>;
 }
 
-export async function getVisitedLocationsInBounds(
-  minLat: number,
-  maxLat: number,
-  minLon: number,
-  maxLon: number
-): Promise<VisitedLocation[]> {
+/**
+ * Gets stats about revealed areas
+ */
+export async function getRevealedStats(): Promise<RevealedAreaStats> {
   if (!db) {
     throw new Error('Database not initialized');
   }
 
-  const rows = await db.getAllAsync<VisitedLocation>(
-    `SELECT id, latitude, longitude, timestamp, accuracy
-     FROM visited_locations
-     WHERE latitude BETWEEN ? AND ?
-     AND longitude BETWEEN ? AND ?`,
-    [minLat, maxLat, minLon, maxLon]
+  const row = await db.getFirstAsync<{ location_count: number; last_updated: number }>(
+    'SELECT location_count, last_updated FROM revealed_geometry WHERE id = 1'
   );
 
-  return rows;
+  return {
+    locationCount: row?.location_count ?? 0,
+    lastUpdated: row?.last_updated ?? 0,
+  };
 }
 
+/**
+ * Clears all revealed geometry and history
+ */
 export async function clearAllLocations(): Promise<void> {
   if (!db) {
     throw new Error('Database not initialized');
   }
 
-  await db.runAsync('DELETE FROM visited_locations');
+  await db.runAsync('DELETE FROM revealed_geometry');
+  await db.runAsync('DELETE FROM location_history');
 }
 
+/**
+ * Gets the count of logged locations (for display)
+ */
 export async function getLocationCount(): Promise<number> {
   if (!db) {
     throw new Error('Database not initialized');
   }
 
   const result = await db.getFirstAsync<{ count: number }>(
-    'SELECT COUNT(*) as count FROM visited_locations'
+    'SELECT location_count as count FROM revealed_geometry WHERE id = 1'
   );
 
   return result?.count ?? 0;
@@ -118,36 +194,31 @@ function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
 }
 
-// Check if a new location is far enough from existing ones to be worth saving
-// This helps reduce database clutter by only saving locations that are at least
-// a minimum distance from any existing saved location
-export async function isLocationSignificant(
+/**
+ * Check if a new location is far enough from the last recorded location
+ * to be worth merging (avoids redundant union operations)
+ */
+let lastRecordedLocation: { lat: number; lon: number } | null = null;
+
+export function isLocationSignificant(
   latitude: number,
   longitude: number,
-  minDistanceMiles: number = 0.02 // ~100 feet by default
-): Promise<boolean> {
-  if (!db) {
-    throw new Error('Database not initialized');
+  minDistanceMiles: number = 0.02 // ~100 feet
+): boolean {
+  if (!lastRecordedLocation) {
+    return true;
   }
 
-  // Get nearby locations within a rough bounding box
-  const latDelta = minDistanceMiles / 69; // Rough conversion: 1 degree lat = ~69 miles
-  const lonDelta = minDistanceMiles / (69 * Math.cos(toRadians(latitude)));
-
-  const nearbyLocations = await getVisitedLocationsInBounds(
-    latitude - latDelta,
-    latitude + latDelta,
-    longitude - lonDelta,
-    longitude + lonDelta
+  const distance = calculateDistanceMiles(
+    latitude,
+    longitude,
+    lastRecordedLocation.lat,
+    lastRecordedLocation.lon
   );
 
-  // Check if any nearby location is within the minimum distance
-  for (const loc of nearbyLocations) {
-    const distance = calculateDistanceMiles(latitude, longitude, loc.latitude, loc.longitude);
-    if (distance < minDistanceMiles) {
-      return false;
-    }
-  }
+  return distance >= minDistanceMiles;
+}
 
-  return true;
+export function updateLastRecordedLocation(latitude: number, longitude: number): void {
+  lastRecordedLocation = { lat: latitude, lon: longitude };
 }

@@ -1,13 +1,13 @@
 import React, { useMemo, useRef, useEffect } from 'react';
 import { StyleSheet, View, Dimensions } from 'react-native';
 import MapLibreGL, { type MapViewRef, type CameraRef } from '@maplibre/maplibre-react-native';
-import { VisitedLocation, LocationPoint } from '../types';
+import { LocationPoint, RevealedGeometry } from '../types';
 
 // Initialize MapLibre
 MapLibreGL.setAccessToken(null);
 
 interface FogOfWarMapProps {
-  visitedLocations: VisitedLocation[];
+  revealedGeometry: RevealedGeometry;
   currentLocation: LocationPoint | null;
   revealRadiusMiles?: number;
 }
@@ -45,7 +45,7 @@ const MAP_STYLE = {
 };
 
 export function FogOfWarMap({
-  visitedLocations,
+  revealedGeometry,
   currentLocation,
   revealRadiusMiles = 0.1,
 }: FogOfWarMapProps) {
@@ -63,55 +63,17 @@ export function FogOfWarMap({
     }
   }, [currentLocation]);
 
-  // Initial center based on current location or visited locations
+  // Initial center based on current location or default
   const initialCenter = useMemo((): [number, number] => {
     if (currentLocation) {
       return [currentLocation.longitude, currentLocation.latitude];
     }
-
-    if (visitedLocations.length > 0) {
-      const latestLocation = visitedLocations[0];
-      return [latestLocation.longitude, latestLocation.latitude];
-    }
-
     return DEFAULT_CENTER;
-  }, [currentLocation, visitedLocations]);
+  }, [currentLocation]);
 
-  // Generate GeoJSON for revealed areas (circles around visited locations)
-  const revealedAreasGeoJSON = useMemo(() => {
-    const features = visitedLocations.map((location) => {
-      // Create a circle polygon using points
-      const center = [location.longitude, location.latitude];
-      const radiusDegrees = milesToDegrees(revealRadiusMiles);
-      const points = 32; // Number of points to approximate circle
-      const coordinates: [number, number][] = [];
-
-      for (let i = 0; i <= points; i++) {
-        const angle = (i / points) * 2 * Math.PI;
-        const lng = center[0] + radiusDegrees * Math.cos(angle) / Math.cos((center[1] * Math.PI) / 180);
-        const lat = center[1] + radiusDegrees * Math.sin(angle);
-        coordinates.push([lng, lat]);
-      }
-
-      return {
-        type: 'Feature' as const,
-        properties: { id: location.id },
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [coordinates],
-        },
-      };
-    });
-
-    return {
-      type: 'FeatureCollection' as const,
-      features,
-    };
-  }, [visitedLocations, revealRadiusMiles]);
-
-  // Generate fog overlay - a large polygon with holes for revealed areas
+  // Generate fog overlay - a world polygon with the revealed area cut out
   const fogOverlayGeoJSON = useMemo(() => {
-    // Create a world-covering polygon
+    // World-covering polygon bounds
     const worldBounds: [number, number][] = [
       [-180, -85],
       [180, -85],
@@ -120,23 +82,36 @@ export function FogOfWarMap({
       [-180, -85],
     ];
 
-    // Create holes for each revealed area
-    const holes = visitedLocations.map((location) => {
-      const center = [location.longitude, location.latitude];
-      const radiusDegrees = milesToDegrees(revealRadiusMiles);
-      const points = 32;
-      const coordinates: [number, number][] = [];
+    if (!revealedGeometry) {
+      // No revealed areas yet - full fog
+      return {
+        type: 'FeatureCollection' as const,
+        features: [
+          {
+            type: 'Feature' as const,
+            properties: {},
+            geometry: {
+              type: 'Polygon' as const,
+              coordinates: [worldBounds],
+            },
+          },
+        ],
+      };
+    }
 
-      // Holes need to be in opposite winding order (clockwise)
-      for (let i = points; i >= 0; i--) {
-        const angle = (i / points) * 2 * Math.PI;
-        const lng = center[0] + radiusDegrees * Math.cos(angle) / Math.cos((center[1] * Math.PI) / 180);
-        const lat = center[1] + radiusDegrees * Math.sin(angle);
-        coordinates.push([lng, lat]);
-      }
+    // Create holes from the revealed geometry
+    const revealedCoords = revealedGeometry.geometry.coordinates;
+    let holes: [number, number][][];
 
-      return coordinates;
-    });
+    if (revealedGeometry.geometry.type === 'Polygon') {
+      // Single polygon - reverse winding for hole
+      holes = [reverseCoordinates(revealedCoords[0] as [number, number][])];
+    } else {
+      // MultiPolygon - each polygon becomes a hole
+      holes = (revealedCoords as [number, number][][][]).map(
+        (polygon) => reverseCoordinates(polygon[0])
+      );
+    }
 
     return {
       type: 'FeatureCollection' as const,
@@ -151,7 +126,17 @@ export function FogOfWarMap({
         },
       ],
     };
-  }, [visitedLocations, revealRadiusMiles]);
+  }, [revealedGeometry]);
+
+  // Border around revealed areas for visual effect
+  const revealedBorderGeoJSON = useMemo(() => {
+    if (!revealedGeometry) return null;
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [revealedGeometry],
+    };
+  }, [revealedGeometry]);
 
   // Current location marker GeoJSON
   const currentLocationGeoJSON = useMemo(() => {
@@ -172,7 +157,7 @@ export function FogOfWarMap({
     };
   }, [currentLocation]);
 
-  // Current location reveal radius
+  // Current location reveal radius indicator
   const currentLocationRadiusGeoJSON = useMemo(() => {
     if (!currentLocation) return null;
 
@@ -232,16 +217,18 @@ export function FogOfWarMap({
           />
         </MapLibreGL.ShapeSource>
 
-        {/* Revealed area borders */}
-        <MapLibreGL.ShapeSource id="revealed-borders-source" shape={revealedAreasGeoJSON}>
-          <MapLibreGL.LineLayer
-            id="revealed-borders-layer"
-            style={{
-              lineColor: 'rgba(76, 175, 80, 0.5)',
-              lineWidth: 2,
-            }}
-          />
-        </MapLibreGL.ShapeSource>
+        {/* Revealed area border */}
+        {revealedBorderGeoJSON && (
+          <MapLibreGL.ShapeSource id="revealed-border-source" shape={revealedBorderGeoJSON}>
+            <MapLibreGL.LineLayer
+              id="revealed-border-layer"
+              style={{
+                lineColor: 'rgba(76, 175, 80, 0.5)',
+                lineWidth: 2,
+              }}
+            />
+          </MapLibreGL.ShapeSource>
+        )}
 
         {/* Current location radius indicator */}
         {currentLocationRadiusGeoJSON && (
@@ -263,7 +250,7 @@ export function FogOfWarMap({
           </MapLibreGL.ShapeSource>
         )}
 
-        {/* Current location marker */}
+        {/* Current location marker (uses offset-adjusted location) */}
         {currentLocationGeoJSON && (
           <MapLibreGL.ShapeSource id="current-location-source" shape={currentLocationGeoJSON}>
             <MapLibreGL.CircleLayer
@@ -277,12 +264,16 @@ export function FogOfWarMap({
             />
           </MapLibreGL.ShapeSource>
         )}
-
-        {/* User location indicator (native) */}
-        <MapLibreGL.UserLocation visible={true} />
       </MapLibreGL.MapView>
     </View>
   );
+}
+
+/**
+ * Reverse coordinate winding order (needed for polygon holes)
+ */
+function reverseCoordinates(coords: [number, number][]): [number, number][] {
+  return [...coords].reverse();
 }
 
 const styles = StyleSheet.create({

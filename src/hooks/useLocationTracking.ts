@@ -1,39 +1,56 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import * as Location from 'expo-location';
-import { LocationPoint } from '../types';
+import { LocationPoint, RevealedGeometry } from '../types';
 import {
   addVisitedLocation,
   isLocationSignificant,
-  getAllVisitedLocations,
+  updateLastRecordedLocation,
+  getRevealedGeometry,
+  getLocationCount,
 } from '../services/database';
-import { VisitedLocation } from '../types';
 
 interface UseLocationTrackingResult {
   currentLocation: LocationPoint | null;
-  visitedLocations: VisitedLocation[];
+  revealedGeometry: RevealedGeometry;
+  locationCount: number;
   isTracking: boolean;
   hasPermission: boolean | null;
   errorMessage: string | null;
+  locationOffset: LocationPoint;
   startTracking: () => Promise<void>;
   stopTracking: () => void;
-  refreshVisitedLocations: () => Promise<void>;
+  refreshRevealedGeometry: () => Promise<void>;
+  adjustLocationOffset: (direction: 'north' | 'south' | 'east' | 'west', meters: number) => void;
+  resetLocationOffset: () => void;
 }
+
+// Convert meters to degrees (approximate)
+const metersToDegreesLat = (meters: number): number => meters / 111320;
+const metersToDegreesLng = (meters: number, latitude: number): number =>
+  meters / (111320 * Math.cos(latitude * Math.PI / 180));
 
 export function useLocationTracking(): UseLocationTrackingResult {
   const [currentLocation, setCurrentLocation] = useState<LocationPoint | null>(null);
-  const [visitedLocations, setVisitedLocations] = useState<VisitedLocation[]>([]);
+  const [revealedGeometry, setRevealedGeometry] = useState<RevealedGeometry>(null);
+  const [locationCount, setLocationCount] = useState(0);
   const [isTracking, setIsTracking] = useState(false);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [locationOffset, setLocationOffset] = useState<LocationPoint>({ latitude: 0, longitude: 0 });
 
   const locationSubscription = useRef<Location.LocationSubscription | null>(null);
+  const baseLocation = useRef<LocationPoint | null>(null);
 
-  const refreshVisitedLocations = useCallback(async () => {
+  const refreshRevealedGeometry = useCallback(async () => {
     try {
-      const locations = await getAllVisitedLocations();
-      setVisitedLocations(locations);
+      const [geometry, count] = await Promise.all([
+        getRevealedGeometry(),
+        getLocationCount(),
+      ]);
+      setRevealedGeometry(geometry);
+      setLocationCount(count);
     } catch (error) {
-      console.error('Error refreshing visited locations:', error);
+      console.error('Error refreshing revealed geometry:', error);
     }
   }, []);
 
@@ -68,23 +85,31 @@ export function useLocationTracking(): UseLocationTrackingResult {
 
   const handleLocationUpdate = useCallback(async (location: Location.LocationObject) => {
     try {
-      const { latitude, longitude, accuracy } = location.coords;
+      const { latitude, longitude } = location.coords;
 
-      setCurrentLocation({ latitude, longitude });
+      // Store the base location from GPS
+      baseLocation.current = { latitude, longitude };
 
-      // Check if this location is significantly different from existing ones
-      const isSignificant = await isLocationSignificant(latitude, longitude, 0.02);
+      // Apply offset to get the displayed location
+      setCurrentLocation({
+        latitude: latitude + locationOffset.latitude,
+        longitude: longitude + locationOffset.longitude,
+      });
 
-      if (isSignificant) {
-        await addVisitedLocation(latitude, longitude, accuracy);
-        await refreshVisitedLocations();
+      // Check if this location is significantly different from the last one
+      // Use the offset-adjusted location for recording
+      const adjustedLat = latitude + locationOffset.latitude;
+      const adjustedLng = longitude + locationOffset.longitude;
+
+      if (isLocationSignificant(adjustedLat, adjustedLng, 0.02)) {
+        await addVisitedLocation(adjustedLat, adjustedLng);
+        updateLastRecordedLocation(adjustedLat, adjustedLng);
+        await refreshRevealedGeometry();
       }
     } catch (error) {
       console.error('Error handling location update:', error);
-      // Don't set error message here to avoid spamming user with errors
-      // during continuous location updates
     }
-  }, [refreshVisitedLocations]);
+  }, [refreshRevealedGeometry, locationOffset]);
 
   const startTracking = useCallback(async () => {
     if (isTracking) return;
@@ -93,6 +118,9 @@ export function useLocationTracking(): UseLocationTrackingResult {
     if (!hasPerms) return;
 
     try {
+      // Load existing revealed geometry
+      await refreshRevealedGeometry();
+
       // Get initial location
       const initialLocation = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
@@ -116,7 +144,7 @@ export function useLocationTracking(): UseLocationTrackingResult {
       console.error('Error starting location tracking:', error);
       setErrorMessage('Error starting location tracking');
     }
-  }, [isTracking, requestPermissions, handleLocationUpdate]);
+  }, [isTracking, requestPermissions, handleLocationUpdate, refreshRevealedGeometry]);
 
   const stopTracking = useCallback(() => {
     if (locationSubscription.current) {
@@ -126,28 +154,85 @@ export function useLocationTracking(): UseLocationTrackingResult {
     setIsTracking(false);
   }, []);
 
-  // Load visited locations on mount
-  useEffect(() => {
-    refreshVisitedLocations();
-  }, [refreshVisitedLocations]);
+  // Adjust location offset in a specific direction
+  const adjustLocationOffset = useCallback(async (direction: 'north' | 'south' | 'east' | 'west', meters: number) => {
+    // Use current location as base if we don't have a GPS base location yet
+    const base = baseLocation.current ?? currentLocation;
+    if (!base) {
+      console.warn('No location available to offset from');
+      return;
+    }
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (locationSubscription.current) {
-        locationSubscription.current.remove();
-      }
-    };
+    const currentLat = base.latitude;
+    let latDelta = 0;
+    let lngDelta = 0;
+
+    switch (direction) {
+      case 'north':
+        latDelta = metersToDegreesLat(meters);
+        break;
+      case 'south':
+        latDelta = -metersToDegreesLat(meters);
+        break;
+      case 'east':
+        lngDelta = metersToDegreesLng(meters, currentLat);
+        break;
+      case 'west':
+        lngDelta = -metersToDegreesLng(meters, currentLat);
+        break;
+    }
+
+    setLocationOffset((prev) => {
+      const newOffset = {
+        latitude: prev.latitude + latDelta,
+        longitude: prev.longitude + lngDelta,
+      };
+
+      // Update current location immediately with new offset
+      const newLocation = {
+        latitude: base.latitude + newOffset.latitude,
+        longitude: base.longitude + newOffset.longitude,
+      };
+      setCurrentLocation(newLocation);
+
+      // Record the new location to reveal fog (async, fire-and-forget)
+      // Use a smaller threshold (0.005 miles = ~8 meters) for manual offset testing
+      (async () => {
+        try {
+          if (isLocationSignificant(newLocation.latitude, newLocation.longitude, 0.005)) {
+            await addVisitedLocation(newLocation.latitude, newLocation.longitude);
+            updateLastRecordedLocation(newLocation.latitude, newLocation.longitude);
+            await refreshRevealedGeometry();
+          }
+        } catch (error) {
+          console.error('Error recording offset location:', error);
+        }
+      })();
+
+      return newOffset;
+    });
+  }, [currentLocation, refreshRevealedGeometry]);
+
+  // Reset location offset to zero
+  const resetLocationOffset = useCallback(() => {
+    setLocationOffset({ latitude: 0, longitude: 0 });
+    if (baseLocation.current) {
+      setCurrentLocation(baseLocation.current);
+    }
   }, []);
 
   return {
     currentLocation,
-    visitedLocations,
+    revealedGeometry,
+    locationCount,
     isTracking,
     hasPermission,
     errorMessage,
+    locationOffset,
     startTracking,
     stopTracking,
-    refreshVisitedLocations,
+    refreshRevealedGeometry,
+    adjustLocationOffset,
+    resetLocationOffset,
   };
 }
