@@ -3,22 +3,13 @@ import { StyleSheet, View, Text, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FogOfWarMap } from './src/components/FogOfWarMap';
 import { ControlPanel } from './src/components/ControlPanel';
+import { LocationOffsetControls } from './src/components/LocationOffsetControls';
 import { useLocationTracking } from './src/hooks/useLocationTracking';
 import { initDatabase, clearAllLocations } from './src/services/database';
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
-
-  const {
-    currentLocation,
-    visitedLocations,
-    isTracking,
-    errorMessage,
-    startTracking,
-    stopTracking,
-    refreshVisitedLocations,
-  } = useLocationTracking();
 
   // Initialize database on app start
   useEffect(() => {
@@ -34,15 +25,6 @@ export default function App() {
 
     setupDatabase();
   }, []);
-
-  const handleClearHistory = async () => {
-    try {
-      await clearAllLocations();
-      await refreshVisitedLocations();
-    } catch (error) {
-      console.error('Failed to clear location history:', error);
-    }
-  };
 
   // Show loading state while database initializes
   if (!isDbReady) {
@@ -61,16 +43,55 @@ export default function App() {
     );
   }
 
+  // Only render the main app after database is ready
+  return <MainApp />;
+}
+
+function MainApp() {
+  const {
+    currentLocation,
+    revealedGeometry,
+    locationCount,
+    isTracking,
+    errorMessage,
+    locationOffset,
+    startTracking,
+    stopTracking,
+    refreshRevealedGeometry,
+    adjustLocationOffset,
+    resetLocationOffset,
+  } = useLocationTracking();
+
+  // Load revealed geometry on mount (now safe because DB is ready)
+  useEffect(() => {
+    refreshRevealedGeometry();
+  }, [refreshRevealedGeometry]);
+
+  const handleClearHistory = async () => {
+    try {
+      await clearAllLocations();
+      await refreshRevealedGeometry();
+    } catch (error) {
+      console.error('Failed to clear location history:', error);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <FogOfWarMap
-        visitedLocations={visitedLocations}
+        revealedGeometry={revealedGeometry}
         currentLocation={currentLocation}
         revealRadiusMiles={0.1}
       />
+      <LocationOffsetControls
+        locationOffset={locationOffset}
+        onAdjust={adjustLocationOffset}
+        onReset={resetLocationOffset}
+        stepMeters={10}
+      />
       <ControlPanel
         isTracking={isTracking}
-        locationCount={visitedLocations.length}
+        locationCount={locationCount}
         onStartTracking={startTracking}
         onStopTracking={stopTracking}
         onClearHistory={handleClearHistory}

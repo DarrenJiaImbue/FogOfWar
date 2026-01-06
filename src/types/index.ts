@@ -17,3 +17,11 @@ export interface MapRegion {
   latitudeDelta: number;
   longitudeDelta: number;
 }
+
+// GeoJSON types for revealed geometry
+export type RevealedGeometry = GeoJSON.Feature<GeoJSON.Polygon | GeoJSON.MultiPolygon> | null;
+
+export interface RevealedAreaStats {
+  locationCount: number;
+  lastUpdated: number;
+}
