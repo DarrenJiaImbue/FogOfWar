@@ -1,7 +1,10 @@
-import React, { useMemo, useCallback, useRef, useState, useEffect } from 'react';
-import { StyleSheet, View, Dimensions, Platform } from 'react-native';
-import MapView, { Circle, Overlay, Region, PROVIDER_GOOGLE } from 'react-native-maps';
-import { VisitedLocation, LocationPoint, MapRegion } from '../types';
+import React, { useMemo, useRef, useEffect } from 'react';
+import { StyleSheet, View, Dimensions } from 'react-native';
+import MapLibreGL, { type MapViewRef, type CameraRef } from '@maplibre/maplibre-react-native';
+import { VisitedLocation, LocationPoint } from '../types';
+
+// Initialize MapLibre
+MapLibreGL.setAccessToken(null);
 
 interface FogOfWarMapProps {
   visitedLocations: VisitedLocation[];
@@ -9,23 +12,36 @@ interface FogOfWarMapProps {
   revealRadiusMiles?: number;
 }
 
-// Convert miles to meters for Circle radius
-const milesToMeters = (miles: number): number => miles * 1609.34;
-
-// Convert miles to latitude degrees (approximate)
-const milesToLatDelta = (miles: number): number => miles / 69;
-
-// Convert miles to longitude degrees (varies with latitude)
-const milesToLonDelta = (miles: number, latitude: number): number => {
-  return miles / (69 * Math.cos((latitude * Math.PI) / 180));
-};
+// Convert miles to degrees (approximate)
+const milesToDegrees = (miles: number): number => miles / 69;
 
 // Default location (San Francisco) if no location available
-const DEFAULT_REGION: MapRegion = {
-  latitude: 37.7749,
-  longitude: -122.4194,
-  latitudeDelta: 0.05,
-  longitudeDelta: 0.05,
+const DEFAULT_CENTER: [number, number] = [-122.4194, 37.7749]; // [lng, lat]
+const DEFAULT_ZOOM = 14;
+
+// Custom style with OpenStreetMap tiles
+const MAP_STYLE = {
+  version: 8 as const,
+  name: 'OSM Style',
+  sources: {
+    osm: {
+      type: 'raster' as const,
+      tiles: [
+        'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+      ],
+      tileSize: 256,
+      attribution: '© OpenStreetMap contributors',
+    },
+  },
+  layers: [
+    {
+      id: 'osm-tiles',
+      type: 'raster' as const,
+      source: 'osm',
+      minzoom: 0,
+      maxzoom: 19,
+    },
+  ],
 };
 
 export function FogOfWarMap({
@@ -33,170 +49,238 @@ export function FogOfWarMap({
   currentLocation,
   revealRadiusMiles = 0.1,
 }: FogOfWarMapProps) {
-  const mapRef = useRef<MapView>(null);
-  const [mapRegion, setMapRegion] = useState<MapRegion>(DEFAULT_REGION);
-
-  // Calculate the revealed circles
-  const revealedCircles = useMemo(() => {
-    return visitedLocations.map((location) => ({
-      id: location.id,
-      center: {
-        latitude: location.latitude,
-        longitude: location.longitude,
-      },
-      radius: milesToMeters(revealRadiusMiles),
-    }));
-  }, [visitedLocations, revealRadiusMiles]);
+  const mapRef = useRef<MapViewRef>(null);
+  const cameraRef = useRef<CameraRef>(null);
 
   // Center map on current location when it changes
   useEffect(() => {
-    if (currentLocation && mapRef.current) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: currentLocation.latitude,
-          longitude: currentLocation.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        },
-        500
-      );
+    if (currentLocation && cameraRef.current) {
+      cameraRef.current.setCamera({
+        centerCoordinate: [currentLocation.longitude, currentLocation.latitude],
+        zoomLevel: 15,
+        animationDuration: 500,
+      });
     }
   }, [currentLocation]);
 
-  // Initial region based on current location or visited locations
-  const initialRegion = useMemo((): MapRegion => {
+  // Initial center based on current location or visited locations
+  const initialCenter = useMemo((): [number, number] => {
     if (currentLocation) {
-      return {
-        latitude: currentLocation.latitude,
-        longitude: currentLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
+      return [currentLocation.longitude, currentLocation.latitude];
     }
 
     if (visitedLocations.length > 0) {
       const latestLocation = visitedLocations[0];
-      return {
-        latitude: latestLocation.latitude,
-        longitude: latestLocation.longitude,
-        latitudeDelta: 0.01,
-        longitudeDelta: 0.01,
-      };
+      return [latestLocation.longitude, latestLocation.latitude];
     }
 
-    return DEFAULT_REGION;
+    return DEFAULT_CENTER;
   }, [currentLocation, visitedLocations]);
 
-  const handleRegionChange = useCallback((region: Region) => {
-    setMapRegion(region);
-  }, []);
+  // Generate GeoJSON for revealed areas (circles around visited locations)
+  const revealedAreasGeoJSON = useMemo(() => {
+    const features = visitedLocations.map((location) => {
+      // Create a circle polygon using points
+      const center = [location.longitude, location.latitude];
+      const radiusDegrees = milesToDegrees(revealRadiusMiles);
+      const points = 32; // Number of points to approximate circle
+      const coordinates: [number, number][] = [];
 
-  // Create fog overlay tiles - we use a grid of semi-transparent dark circles
-  // that are "cut out" by the revealed areas
-  const fogTiles = useMemo(() => {
-    const { latitude, longitude, latitudeDelta, longitudeDelta } = mapRegion;
-
-    // Create a fog grid that covers the visible area plus some padding
-    const fogCells: Array<{
-      id: string;
-      center: { latitude: number; longitude: number };
-      isRevealed: boolean;
-    }> = [];
-
-    // Grid resolution - smaller values = more detailed fog but more rendering overhead
-    const gridSize = 0.002; // Approximately 0.14 miles or 220 meters per cell
-
-    const startLat = latitude - latitudeDelta - 0.01;
-    const endLat = latitude + latitudeDelta + 0.01;
-    const startLon = longitude - longitudeDelta - 0.01;
-    const endLon = longitude + longitudeDelta + 0.01;
-
-    for (let lat = startLat; lat <= endLat; lat += gridSize) {
-      for (let lon = startLon; lon <= endLon; lon += gridSize) {
-        // Check if this cell is revealed by any visited location
-        const isRevealed = visitedLocations.some((location) => {
-          const latDiff = Math.abs(lat - location.latitude);
-          const lonDiff = Math.abs(lon - location.longitude);
-
-          // Quick bounding box check first
-          const revealLatDelta = milesToLatDelta(revealRadiusMiles);
-          const revealLonDelta = milesToLonDelta(revealRadiusMiles, lat);
-
-          if (latDiff > revealLatDelta || lonDiff > revealLonDelta) {
-            return false;
-          }
-
-          // More accurate circular check
-          const distanceSquared =
-            Math.pow(latDiff * 69, 2) +
-            Math.pow(lonDiff * 69 * Math.cos((lat * Math.PI) / 180), 2);
-
-          return distanceSquared <= Math.pow(revealRadiusMiles, 2);
-        });
-
-        if (!isRevealed) {
-          fogCells.push({
-            id: `fog-${lat.toFixed(6)}-${lon.toFixed(6)}`,
-            center: { latitude: lat, longitude: lon },
-            isRevealed: false,
-          });
-        }
+      for (let i = 0; i <= points; i++) {
+        const angle = (i / points) * 2 * Math.PI;
+        const lng = center[0] + radiusDegrees * Math.cos(angle) / Math.cos((center[1] * Math.PI) / 180);
+        const lat = center[1] + radiusDegrees * Math.sin(angle);
+        coordinates.push([lng, lat]);
       }
+
+      return {
+        type: 'Feature' as const,
+        properties: { id: location.id },
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [coordinates],
+        },
+      };
+    });
+
+    return {
+      type: 'FeatureCollection' as const,
+      features,
+    };
+  }, [visitedLocations, revealRadiusMiles]);
+
+  // Generate fog overlay - a large polygon with holes for revealed areas
+  const fogOverlayGeoJSON = useMemo(() => {
+    // Create a world-covering polygon
+    const worldBounds: [number, number][] = [
+      [-180, -85],
+      [180, -85],
+      [180, 85],
+      [-180, 85],
+      [-180, -85],
+    ];
+
+    // Create holes for each revealed area
+    const holes = visitedLocations.map((location) => {
+      const center = [location.longitude, location.latitude];
+      const radiusDegrees = milesToDegrees(revealRadiusMiles);
+      const points = 32;
+      const coordinates: [number, number][] = [];
+
+      // Holes need to be in opposite winding order (clockwise)
+      for (let i = points; i >= 0; i--) {
+        const angle = (i / points) * 2 * Math.PI;
+        const lng = center[0] + radiusDegrees * Math.cos(angle) / Math.cos((center[1] * Math.PI) / 180);
+        const lat = center[1] + radiusDegrees * Math.sin(angle);
+        coordinates.push([lng, lat]);
+      }
+
+      return coordinates;
+    });
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: {
+            type: 'Polygon' as const,
+            coordinates: [worldBounds, ...holes],
+          },
+        },
+      ],
+    };
+  }, [visitedLocations, revealRadiusMiles]);
+
+  // Current location marker GeoJSON
+  const currentLocationGeoJSON = useMemo(() => {
+    if (!currentLocation) return null;
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: {
+            type: 'Point' as const,
+            coordinates: [currentLocation.longitude, currentLocation.latitude],
+          },
+        },
+      ],
+    };
+  }, [currentLocation]);
+
+  // Current location reveal radius
+  const currentLocationRadiusGeoJSON = useMemo(() => {
+    if (!currentLocation) return null;
+
+    const center = [currentLocation.longitude, currentLocation.latitude];
+    const radiusDegrees = milesToDegrees(revealRadiusMiles);
+    const points = 32;
+    const coordinates: [number, number][] = [];
+
+    for (let i = 0; i <= points; i++) {
+      const angle = (i / points) * 2 * Math.PI;
+      const lng = center[0] + radiusDegrees * Math.cos(angle) / Math.cos((center[1] * Math.PI) / 180);
+      const lat = center[1] + radiusDegrees * Math.sin(angle);
+      coordinates.push([lng, lat]);
     }
 
-    return fogCells;
-  }, [mapRegion, visitedLocations, revealRadiusMiles]);
+    return {
+      type: 'FeatureCollection' as const,
+      features: [
+        {
+          type: 'Feature' as const,
+          properties: {},
+          geometry: {
+            type: 'Polygon' as const,
+            coordinates: [coordinates],
+          },
+        },
+      ],
+    };
+  }, [currentLocation, revealRadiusMiles]);
 
   return (
     <View style={styles.container}>
-      <MapView
+      <MapLibreGL.MapView
         ref={mapRef}
         style={styles.map}
-        initialRegion={initialRegion}
-        onRegionChangeComplete={handleRegionChange}
-        showsUserLocation
-        showsMyLocationButton
-        mapType="standard"
-        provider={Platform.OS === 'android' ? PROVIDER_GOOGLE : undefined}
+        mapStyle={JSON.stringify(MAP_STYLE)}
+        logoEnabled={false}
+        attributionEnabled={true}
+        attributionPosition={{ bottom: 8, right: 8 }}
       >
-        {/* Fog of war overlay - dark circles covering unexplored areas */}
-        {fogTiles.map((tile) => (
-          <Circle
-            key={tile.id}
-            center={tile.center}
-            radius={150} // Radius in meters for fog cells
-            fillColor="rgba(30, 30, 30, 0.85)"
-            strokeColor="transparent"
-            strokeWidth={0}
-          />
-        ))}
+        <MapLibreGL.Camera
+          ref={cameraRef}
+          defaultSettings={{
+            centerCoordinate: initialCenter,
+            zoomLevel: DEFAULT_ZOOM,
+          }}
+        />
 
-        {/* Current location marker with glow effect */}
-        {currentLocation && (
-          <>
-            <Circle
-              key="current-location-glow"
-              center={currentLocation}
-              radius={milesToMeters(revealRadiusMiles)}
-              fillColor="rgba(66, 133, 244, 0.15)"
-              strokeColor="rgba(66, 133, 244, 0.5)"
-              strokeWidth={2}
+        {/* Fog of war overlay */}
+        <MapLibreGL.ShapeSource id="fog-source" shape={fogOverlayGeoJSON}>
+          <MapLibreGL.FillLayer
+            id="fog-layer"
+            style={{
+              fillColor: 'rgba(30, 30, 30, 0.85)',
+              fillOpacity: 1,
+            }}
+          />
+        </MapLibreGL.ShapeSource>
+
+        {/* Revealed area borders */}
+        <MapLibreGL.ShapeSource id="revealed-borders-source" shape={revealedAreasGeoJSON}>
+          <MapLibreGL.LineLayer
+            id="revealed-borders-layer"
+            style={{
+              lineColor: 'rgba(76, 175, 80, 0.5)',
+              lineWidth: 2,
+            }}
+          />
+        </MapLibreGL.ShapeSource>
+
+        {/* Current location radius indicator */}
+        {currentLocationRadiusGeoJSON && (
+          <MapLibreGL.ShapeSource id="current-radius-source" shape={currentLocationRadiusGeoJSON}>
+            <MapLibreGL.FillLayer
+              id="current-radius-fill"
+              style={{
+                fillColor: 'rgba(66, 133, 244, 0.15)',
+                fillOpacity: 1,
+              }}
             />
-          </>
+            <MapLibreGL.LineLayer
+              id="current-radius-line"
+              style={{
+                lineColor: 'rgba(66, 133, 244, 0.5)',
+                lineWidth: 2,
+              }}
+            />
+          </MapLibreGL.ShapeSource>
         )}
 
-        {/* Revealed area borders (optional visual enhancement) */}
-        {revealedCircles.map((circle) => (
-          <Circle
-            key={`reveal-border-${circle.id}`}
-            center={circle.center}
-            radius={circle.radius}
-            fillColor="transparent"
-            strokeColor="rgba(76, 175, 80, 0.3)"
-            strokeWidth={1}
-          />
-        ))}
-      </MapView>
+        {/* Current location marker */}
+        {currentLocationGeoJSON && (
+          <MapLibreGL.ShapeSource id="current-location-source" shape={currentLocationGeoJSON}>
+            <MapLibreGL.CircleLayer
+              id="current-location-layer"
+              style={{
+                circleRadius: 8,
+                circleColor: '#4285F4',
+                circleStrokeColor: '#FFFFFF',
+                circleStrokeWidth: 3,
+              }}
+            />
+          </MapLibreGL.ShapeSource>
+        )}
+
+        {/* User location indicator (native) */}
+        <MapLibreGL.UserLocation visible={true} />
+      </MapLibreGL.MapView>
     </View>
   );
 }

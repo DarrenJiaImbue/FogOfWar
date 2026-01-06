@@ -20,9 +20,6 @@
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
         "NSLocationAlwaysUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
         "UIBackgroundModes": ["location"]
-      },
-      "config": {
-        "googleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY_HERE"
       }
     },
     "android": {
@@ -39,12 +36,7 @@
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION"
-      ],
-      "config": {
-        "googleMaps": {
-          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY_HERE"
-        }
-      }
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -60,7 +52,8 @@
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
         }
-      ]
+      ],
+      "@maplibre/maplibre-react-native"
     ]
   }
 }

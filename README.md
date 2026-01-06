@@ -10,6 +10,7 @@ A mobile app for iOS and Android that tracks your visited locations and reveals 
 - Background location tracking support
 - Clear history functionality
 - Works on both iOS and Android
+- **Free map tiles** - uses OpenStreetMap via MapLibre (no API key required!)
 
 ## Prerequisites
 
@@ -17,7 +18,6 @@ A mobile app for iOS and Android that tracks your visited locations and reveals 
 - Expo CLI (`npm install -g expo-cli`)
 - For iOS: Xcode (macOS only)
 - For Android: Android Studio with an emulator or a physical device
-- Google Maps API key (for production builds)
 
 ## Setup
 
@@ -26,29 +26,31 @@ A mobile app for iOS and Android that tracks your visited locations and reveals 
    npm install
    ```
 
-2. Configure Google Maps API key (required for Android, optional for iOS):
-   - Get an API key from [Google Cloud Console](https://console.cloud.google.com/)
-   - Enable "Maps SDK for Android" and "Maps SDK for iOS"
-   - Replace `YOUR_GOOGLE_MAPS_API_KEY_HERE` in `app.json` with your actual API key
-
-3. Start the development server:
+2. Start the development server:
    ```bash
    npm start
    ```
 
-4. Run on a device/emulator:
+3. Run on a device/emulator:
    - Press `i` for iOS simulator (macOS only)
    - Press `a` for Android emulator
    - Scan the QR code with Expo Go app on your physical device
 
-## Building for Production
+**Note:** This app uses native modules (MapLibre, SQLite), so it requires a development build rather than Expo Go for full functionality.
 
-### Development build (recommended for testing):
+## Building for Development
+
+Since this app uses native modules, you need to create a development build:
+
 ```bash
+# For iOS (macOS only)
 npx expo run:ios
-# or
+
+# For Android
 npx expo run:android
 ```
+
+## Building for Production
 
 ### EAS Build (for app store distribution):
 ```bash
@@ -62,7 +64,7 @@ npx eas build --platform android
 ├── App.tsx                 # Main app component
 ├── src/
 │   ├── components/
-│   │   ├── FogOfWarMap.tsx # Map with fog overlay
+│   │   ├── FogOfWarMap.tsx # Map with fog overlay (MapLibre + OpenStreetMap)
 │   │   └── ControlPanel.tsx # UI controls
 │   ├── hooks/
 │   │   └── useLocationTracking.ts # Location tracking hook
@@ -95,6 +97,12 @@ The app requires the following permissions:
 3. The map displays all visited locations with a revealed radius of 0.1 miles
 4. Unexplored areas are covered with a semi-transparent fog overlay
 5. Location data persists between app sessions
+
+## Map Tiles
+
+This app uses **MapLibre** with **OpenStreetMap** tiles, which are completely free to use. No API key is required!
+
+The map data is provided by OpenStreetMap contributors under the [ODbL license](https://www.openstreetmap.org/copyright).
 
 ## Configuration
 
