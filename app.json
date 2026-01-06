@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "Fog of War Explorer",
+    "slug": "fog-of-war-explorer",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fogofwar.explorer",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app uses your location to reveal the map as you explore new areas.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
+        "NSLocationAlwaysUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
+        "UIBackgroundModes": ["location"]
+      },
+      "config": {
+        "googleMapsApiKey": "YOUR_GOOGLE_MAPS_API_KEY_HERE"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false,
+      "package": "com.fogofwar.explorer",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "YOUR_GOOGLE_MAPS_API_KEY_HERE"
+        }
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-sqlite",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "This app uses your location to reveal the map as you explore new areas.",
+          "locationAlwaysPermission": "This app tracks your location in the background to continue revealing the map as you explore.",
+          "locationWhenInUsePermission": "This app uses your location to reveal the map as you explore new areas.",
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
+        }
+      ]
+    ]
+  }
+}
