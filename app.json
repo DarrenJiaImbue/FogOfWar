@@ -19,7 +19,11 @@
         "NSLocationWhenInUseUsageDescription": "This app uses your location to reveal the map as you explore new areas.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
         "NSLocationAlwaysUsageDescription": "This app tracks your location in the background to continue revealing the map as you explore.",
-        "UIBackgroundModes": ["location"]
+        "UIBackgroundModes": [
+          "location",
+          "location"
+        ],
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -35,7 +39,12 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
       ]
     },
     "web": {
@@ -54,6 +63,11 @@
         }
       ],
       "@maplibre/maplibre-react-native"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "5b41a82d-fac1-4082-b0c8-03b9ec68cd53"
+      }
+    }
   }
 }

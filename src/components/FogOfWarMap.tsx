@@ -223,7 +223,7 @@ export function FogOfWarMap({
             id="fog-layer"
             style={{
               fillPattern: 'paperTexture',
-              fillOpacity: 0.92,
+              fillOpacity: 1.0,
             }}
           />
         </MapLibreGL.ShapeSource>
