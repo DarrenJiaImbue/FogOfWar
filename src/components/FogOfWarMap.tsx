@@ -47,92 +47,6 @@ const MAP_STYLE = {
   ],
 };
 
-// Number of blur/transition layers for smooth edge effect
-const BLUR_LAYERS = 6;
-// Total distance of blur effect in miles (how far the gradient extends into revealed area)
-const BLUR_DISTANCE_MILES = 0.03;
-
-/**
- * Expand or contract a polygon ring by a given distance in miles.
- * Positive distance expands outward, negative contracts inward.
- * Uses a simple offset approach for each vertex.
- */
-function offsetPolygonRing(
-  ring: [number, number][],
-  distanceMiles: number,
-  expandOutward: boolean = true
-): [number, number][] {
-  if (ring.length < 3) return ring;
-
-  const distanceDegrees = milesToDegrees(distanceMiles);
-  const direction = expandOutward ? 1 : -1;
-  const result: [number, number][] = [];
-
-  for (let i = 0; i < ring.length - 1; i++) {
-    const prev = ring[i === 0 ? ring.length - 2 : i - 1];
-    const curr = ring[i];
-    const next = ring[(i + 1) % (ring.length - 1)];
-
-    // Calculate vectors to neighbors
-    const dx1 = curr[0] - prev[0];
-    const dy1 = curr[1] - prev[1];
-    const dx2 = next[0] - curr[0];
-    const dy2 = next[1] - curr[1];
-
-    // Normalize and get perpendicular (outward normal)
-    const len1 = Math.sqrt(dx1 * dx1 + dy1 * dy1) || 1;
-    const len2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
-
-    // Perpendicular vectors (pointing outward for CCW winding)
-    const nx1 = -dy1 / len1;
-    const ny1 = dx1 / len1;
-    const nx2 = -dy2 / len2;
-    const ny2 = dx2 / len2;
-
-    // Average the normals for smooth corners
-    let nx = (nx1 + nx2) / 2;
-    let ny = (ny1 + ny2) / 2;
-    const nLen = Math.sqrt(nx * nx + ny * ny) || 1;
-    nx /= nLen;
-    ny /= nLen;
-
-    // Adjust for latitude (longitude degrees are smaller near poles)
-    const latRadians = (curr[1] * Math.PI) / 180;
-    const lngAdjust = 1 / Math.cos(latRadians);
-
-    result.push([
-      curr[0] + direction * nx * distanceDegrees * lngAdjust,
-      curr[1] + direction * ny * distanceDegrees,
-    ]);
-  }
-
-  // Close the ring
-  result.push(result[0]);
-  return result;
-}
-
-/**
- * Create a GeoJSON FeatureCollection with a world-covering polygon and holes
- */
-function createFeatureCollection(
-  worldBounds: [number, number][],
-  holes: [number, number][][]
-) {
-  return {
-    type: 'FeatureCollection' as const,
-    features: [
-      {
-        type: 'Feature' as const,
-        properties: {},
-        geometry: {
-          type: 'Polygon' as const,
-          coordinates: [worldBounds, ...holes],
-        },
-      },
-    ],
-  };
-}
-
 export function FogOfWarMap({
   revealedGeometry,
   currentLocation,
@@ -215,62 +129,6 @@ export function FogOfWarMap({
         },
       ],
     };
-  }, [revealedGeometry]);
-
-  // Generate blur transition layers - each layer has holes that are progressively smaller
-  // This creates a gradient effect from revealed (transparent) to fog (opaque)
-  const blurLayersGeoJSON = useMemo(() => {
-    if (!revealedGeometry) return [];
-
-    const worldBounds: [number, number][] = [
-      [-180, -85],
-      [180, -85],
-      [180, 85],
-      [-180, 85],
-      [-180, -85],
-    ];
-
-    const layers: Array<{
-      geojson: ReturnType<typeof createFeatureCollection>;
-      opacity: number;
-    }> = [];
-
-    const revealedCoords = revealedGeometry.geometry.coordinates;
-    const isMultiPolygon = revealedGeometry.geometry.type === 'MultiPolygon';
-
-    // Create blur layers from outermost (most transparent) to innermost (before main fog)
-    for (let i = 0; i < BLUR_LAYERS; i++) {
-      // Distance to contract the hole inward (larger = smaller hole = more fog showing)
-      const contractDistance = (BLUR_DISTANCE_MILES / BLUR_LAYERS) * (i + 1);
-
-      // Opacity increases as we go inward (closer to the fog)
-      // Use a smooth curve for more natural transition
-      const t = (i + 1) / (BLUR_LAYERS + 1);
-      const opacity = t * t * 0.85; // Quadratic ease-in, max 0.85 to match main fog
-
-      let holes: [number, number][][];
-
-      if (isMultiPolygon) {
-        holes = (revealedCoords as [number, number][][][]).map((polygon) => {
-          const contracted = offsetPolygonRing(polygon[0], contractDistance, false);
-          return reverseCoordinates(contracted);
-        });
-      } else {
-        const contracted = offsetPolygonRing(
-          revealedCoords[0] as [number, number][],
-          contractDistance,
-          false
-        );
-        holes = [reverseCoordinates(contracted)];
-      }
-
-      layers.push({
-        geojson: createFeatureCollection(worldBounds, holes),
-        opacity,
-      });
-    }
-
-    return layers;
   }, [revealedGeometry]);
 
   // Border around revealed areas for visual effect
@@ -359,24 +217,7 @@ export function FogOfWarMap({
           }}
         />
 
-        {/* Blur transition layers - rendered from outermost to innermost */}
-        {blurLayersGeoJSON.map((layer, index) => (
-          <MapLibreGL.ShapeSource
-            key={`blur-source-${index}`}
-            id={`blur-source-${index}`}
-            shape={layer.geojson}
-          >
-            <MapLibreGL.FillLayer
-              id={`blur-layer-${index}`}
-              style={{
-                fillPattern: 'paperTexture',
-                fillOpacity: layer.opacity,
-              }}
-            />
-          </MapLibreGL.ShapeSource>
-        ))}
-
-        {/* Main fog of war overlay with paper texture */}
+        {/* Fog of war overlay with paper texture */}
         <MapLibreGL.ShapeSource id="fog-source" shape={fogOverlayGeoJSON}>
           <MapLibreGL.FillLayer
             id="fog-layer"
