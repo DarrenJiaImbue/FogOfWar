@@ -1,11 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { StyleSheet, View, Text, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { FogOfWarMap } from './src/components/FogOfWarMap';
 import { ControlPanel } from './src/components/ControlPanel';
 import { LocationOffsetControls } from './src/components/LocationOffsetControls';
+import { SharePanel } from './src/components/SharePanel';
 import { useLocationTracking } from './src/hooks/useLocationTracking';
-import { initDatabase, clearAllLocations } from './src/services/database';
+import { useBluetooth } from './src/hooks/useBluetooth';
+import {
+  initDatabase,
+  clearAllLocations,
+  getSharedOnlyGeometry,
+  getAllRevealedGeometry,
+  getSharedStats,
+} from './src/services/database';
+import { RevealedGeometry } from './src/types';
 
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
@@ -48,6 +57,11 @@ export default function App() {
 }
 
 function MainApp() {
+  const [isSharePanelVisible, setIsSharePanelVisible] = useState(false);
+  const [sharedOnlyGeometry, setSharedOnlyGeometry] = useState<RevealedGeometry>(null);
+  const [allRevealedGeometry, setAllRevealedGeometry] = useState<RevealedGeometry>(null);
+  const [sharedLocationCount, setSharedLocationCount] = useState(0);
+
   const {
     currentLocation,
     revealedGeometry,
@@ -62,24 +76,64 @@ function MainApp() {
     resetLocationOffset,
   } = useLocationTracking();
 
+  // Refresh all geometry (personal, shared, combined)
+  const refreshAllGeometry = useCallback(async () => {
+    try {
+      await refreshRevealedGeometry();
+      const sharedOnly = await getSharedOnlyGeometry();
+      const allRevealed = await getAllRevealedGeometry();
+      const sharedStats = await getSharedStats();
+
+      setSharedOnlyGeometry(sharedOnly);
+      setAllRevealedGeometry(allRevealed);
+      setSharedLocationCount(sharedStats.locationCount);
+    } catch (error) {
+      console.error('Failed to refresh geometry:', error);
+    }
+  }, [refreshRevealedGeometry]);
+
+  // Bluetooth hook - pass callback for when locations are received
+  const {
+    bluetoothState,
+    isScanning,
+    discoveredDevices,
+    transferProgress,
+    startScanning,
+    stopScanningAction,
+    connectAndShare,
+    resetTransfer,
+  } = useBluetooth(refreshAllGeometry);
+
   // Load revealed geometry on mount (now safe because DB is ready)
   useEffect(() => {
-    refreshRevealedGeometry();
-  }, [refreshRevealedGeometry]);
+    refreshAllGeometry();
+  }, [refreshAllGeometry]);
 
   const handleClearHistory = async () => {
     try {
       await clearAllLocations();
-      await refreshRevealedGeometry();
+      await refreshAllGeometry();
     } catch (error) {
       console.error('Failed to clear location history:', error);
     }
+  };
+
+  const handleSharePress = () => {
+    setIsSharePanelVisible(true);
+  };
+
+  const handleSharePanelClose = () => {
+    setIsSharePanelVisible(false);
+    stopScanningAction();
+    resetTransfer();
   };
 
   return (
     <View style={styles.container}>
       <FogOfWarMap
         revealedGeometry={revealedGeometry}
+        sharedOnlyGeometry={sharedOnlyGeometry}
+        allRevealedGeometry={allRevealedGeometry}
         currentLocation={currentLocation}
         revealRadiusMiles={0.1}
       />
@@ -92,10 +146,24 @@ function MainApp() {
       <ControlPanel
         isTracking={isTracking}
         locationCount={locationCount}
+        sharedLocationCount={sharedLocationCount}
         onStartTracking={startTracking}
         onStopTracking={stopTracking}
         onClearHistory={handleClearHistory}
+        onSharePress={handleSharePress}
         errorMessage={errorMessage}
+      />
+      <SharePanel
+        visible={isSharePanelVisible}
+        onClose={handleSharePanelClose}
+        bluetoothState={bluetoothState}
+        isScanning={isScanning}
+        discoveredDevices={discoveredDevices}
+        transferProgress={transferProgress}
+        onStartScanning={startScanning}
+        onStopScanning={stopScanningAction}
+        onDeviceSelect={connectAndShare}
+        onReset={resetTransfer}
       />
       <StatusBar style="dark" />
     </View>

@@ -10,18 +10,22 @@ import {
 interface ControlPanelProps {
   isTracking: boolean;
   locationCount: number;
+  sharedLocationCount: number;
   onStartTracking: () => void;
   onStopTracking: () => void;
   onClearHistory: () => void;
+  onSharePress: () => void;
   errorMessage: string | null;
 }
 
 export function ControlPanel({
   isTracking,
   locationCount,
+  sharedLocationCount,
   onStartTracking,
   onStopTracking,
   onClearHistory,
+  onSharePress,
   errorMessage,
 }: ControlPanelProps) {
   const handleClearPress = () => {
@@ -50,6 +54,7 @@ export function ControlPanel({
 
       <Text style={styles.locationCount}>
         {locationCount} location{locationCount !== 1 ? 's' : ''} explored
+        {sharedLocationCount > 0 && ` | ${sharedLocationCount} shared`}
       </Text>
 
       {errorMessage && (
@@ -65,15 +70,22 @@ export function ControlPanel({
           onPress={isTracking ? onStopTracking : onStartTracking}
         >
           <Text style={styles.buttonText}>
-            {isTracking ? 'Stop Tracking' : 'Start Tracking'}
+            {isTracking ? 'Stop' : 'Start'}
           </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.button, styles.buttonShare]}
+          onPress={onSharePress}
+        >
+          <Text style={styles.buttonText}>Share</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.button, styles.buttonClear]}
           onPress={handleClearPress}
         >
-          <Text style={styles.buttonText}>Clear History</Text>
+          <Text style={styles.buttonText}>Clear</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -143,6 +155,9 @@ const styles = StyleSheet.create({
   },
   buttonStop: {
     backgroundColor: '#FF9800',
+  },
+  buttonShare: {
+    backgroundColor: '#2196F3',
   },
   buttonClear: {
     backgroundColor: '#F44336',

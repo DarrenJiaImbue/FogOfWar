@@ -10,7 +10,9 @@ const paperTexture = require('../../assets/paper-texture.jpg');
 MapLibreGL.setAccessToken(null);
 
 interface FogOfWarMapProps {
-  revealedGeometry: RevealedGeometry;
+  revealedGeometry: RevealedGeometry;      // Personal locations (fully revealed)
+  sharedOnlyGeometry: RevealedGeometry;    // Shared but not personal (50% fog)
+  allRevealedGeometry: RevealedGeometry;   // Union of personal + shared (for fog cutout)
   currentLocation: LocationPoint | null;
   revealRadiusMiles?: number;
 }
@@ -49,6 +51,8 @@ const MAP_STYLE = {
 
 export function FogOfWarMap({
   revealedGeometry,
+  sharedOnlyGeometry,
+  allRevealedGeometry,
   currentLocation,
   revealRadiusMiles = 0.1,
 }: FogOfWarMapProps) {
@@ -74,7 +78,7 @@ export function FogOfWarMap({
     return DEFAULT_CENTER;
   }, [currentLocation]);
 
-  // Generate fog overlay - a world polygon with the revealed area cut out
+  // Generate fog overlay - a world polygon with ALL revealed areas cut out (personal + shared)
   const fogOverlayGeoJSON = useMemo(() => {
     // World-covering polygon bounds
     const worldBounds: [number, number][] = [
@@ -85,7 +89,10 @@ export function FogOfWarMap({
       [-180, -85],
     ];
 
-    if (!revealedGeometry) {
+    // Use allRevealedGeometry (union of personal + shared) for the fog cutout
+    const geometryToCutOut = allRevealedGeometry || revealedGeometry;
+
+    if (!geometryToCutOut) {
       // No revealed areas yet - full fog
       return {
         type: 'FeatureCollection' as const,
@@ -103,10 +110,10 @@ export function FogOfWarMap({
     }
 
     // Create holes from the revealed geometry
-    const revealedCoords = revealedGeometry.geometry.coordinates;
+    const revealedCoords = geometryToCutOut.geometry.coordinates;
     let holes: [number, number][][];
 
-    if (revealedGeometry.geometry.type === 'Polygon') {
+    if (geometryToCutOut.geometry.type === 'Polygon') {
       // Single polygon - reverse winding for hole
       holes = [reverseCoordinates(revealedCoords[0] as [number, number][])];
     } else {
@@ -129,7 +136,7 @@ export function FogOfWarMap({
         },
       ],
     };
-  }, [revealedGeometry]);
+  }, [allRevealedGeometry, revealedGeometry]);
 
   // Border around revealed areas for visual effect
   const revealedBorderGeoJSON = useMemo(() => {
@@ -140,6 +147,16 @@ export function FogOfWarMap({
       features: [revealedGeometry],
     };
   }, [revealedGeometry]);
+
+  // Shared-only areas overlay (50% opacity fog for areas shared but not personally visited)
+  const sharedOnlyOverlayGeoJSON = useMemo(() => {
+    if (!sharedOnlyGeometry) return null;
+
+    return {
+      type: 'FeatureCollection' as const,
+      features: [sharedOnlyGeometry],
+    };
+  }, [sharedOnlyGeometry]);
 
   // Current location marker GeoJSON
   const currentLocationGeoJSON = useMemo(() => {
@@ -217,7 +234,20 @@ export function FogOfWarMap({
           }}
         />
 
-        {/* Fog of war overlay with paper texture */}
+        {/* Shared-only areas - 50% opacity fog (areas revealed by others but not personally visited) */}
+        {sharedOnlyOverlayGeoJSON && (
+          <MapLibreGL.ShapeSource id="shared-fog-source" shape={sharedOnlyOverlayGeoJSON}>
+            <MapLibreGL.FillLayer
+              id="shared-fog-layer"
+              style={{
+                fillPattern: 'paperTexture',
+                fillOpacity: 0.5,
+              }}
+            />
+          </MapLibreGL.ShapeSource>
+        )}
+
+        {/* Fog of war overlay with paper texture (fully unexplored areas) */}
         <MapLibreGL.ShapeSource id="fog-source" shape={fogOverlayGeoJSON}>
           <MapLibreGL.FillLayer
             id="fog-layer"
