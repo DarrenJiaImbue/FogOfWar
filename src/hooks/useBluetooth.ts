@@ -50,29 +50,44 @@ export function useBluetooth(
 
   // Initialize Bluetooth on mount
   useEffect(() => {
+    console.log('[useBluetooth] Hook mounted, initializing Bluetooth');
     initBluetooth();
 
     // Check initial state
-    getBluetoothState().then(setBluetoothState);
+    console.log('[useBluetooth] Checking initial Bluetooth state');
+    getBluetoothState().then((state) => {
+      console.log('[useBluetooth] Initial Bluetooth state:', state);
+      setBluetoothState(state);
+    });
 
     // Subscribe to state changes
-    const unsubscribe = onBluetoothStateChange(setBluetoothState);
+    console.log('[useBluetooth] Subscribing to state changes');
+    const unsubscribe = onBluetoothStateChange((state) => {
+      console.log('[useBluetooth] Bluetooth state changed to:', state);
+      setBluetoothState(state);
+    });
 
     return () => {
+      console.log('[useBluetooth] Hook unmounting, cleaning up');
       unsubscribe();
       if (stopScanRef.current) {
+        console.log('[useBluetooth] Stopping active scan on unmount');
         stopScanRef.current();
       }
       destroyBluetooth();
+      console.log('[useBluetooth] Cleanup complete');
     };
   }, []);
 
   // Request permissions
   const requestPermissions = useCallback(async (): Promise<boolean> => {
+    console.log('[useBluetooth] Requesting Bluetooth permissions');
     const granted = await requestBluetoothPermissions();
+    console.log('[useBluetooth] Permissions granted:', granted);
     setPermissionsGranted(granted);
 
     if (!granted) {
+      console.log('[useBluetooth] Permissions denied, showing alert');
       Alert.alert(
         'Bluetooth Permission Required',
         'Please grant Bluetooth permissions to share locations with nearby users.',
@@ -85,14 +100,22 @@ export function useBluetooth(
 
   // Start scanning for nearby devices
   const startScanning = useCallback(async () => {
+    console.log('[useBluetooth] startScanning() called');
+    console.log('[useBluetooth] Current state - permissionsGranted:', permissionsGranted, 'bluetoothState:', bluetoothState);
+
     // Check permissions first
     if (!permissionsGranted) {
+      console.log('[useBluetooth] Permissions not granted, requesting...');
       const granted = await requestPermissions();
-      if (!granted) return;
+      if (!granted) {
+        console.log('[useBluetooth] Permissions request failed, aborting scan');
+        return;
+      }
     }
 
     // Check Bluetooth is on
     if (bluetoothState !== 'poweredOn') {
+      console.log('[useBluetooth] Bluetooth not powered on (state:', bluetoothState, '), showing alert');
       Alert.alert(
         'Bluetooth Required',
         'Please turn on Bluetooth to share locations with nearby users.',
@@ -101,22 +124,27 @@ export function useBluetooth(
       return;
     }
 
+    console.log('[useBluetooth] Starting scan - clearing discovered devices, setting isScanning=true');
     setDiscoveredDevices([]);
     setIsScanning(true);
     setTransferProgress({ state: 'scanning', currentChunk: 0, totalChunks: 0 });
 
+    console.log('[useBluetooth] Calling scanForDevices()');
     stopScanRef.current = scanForDevices(
       (device) => {
+        console.log('[useBluetooth] onDeviceFound callback - device:', device.id, device.name);
         setDiscoveredDevices((prev) => {
           // Avoid duplicates
           if (prev.some((d) => d.id === device.id)) {
+            console.log('[useBluetooth] Device already in list, skipping:', device.id);
             return prev;
           }
+          console.log('[useBluetooth] Adding new device to list:', device.id, '- total devices:', prev.length + 1);
           return [...prev, device];
         });
       },
       (error) => {
-        console.error('Scan error:', error);
+        console.error('[useBluetooth] Scan error callback:', error.message);
         setIsScanning(false);
         setTransferProgress({
           state: 'error',
@@ -128,27 +156,38 @@ export function useBluetooth(
     );
 
     // Auto-stop scanning after 30 seconds
+    console.log('[useBluetooth] Setting 30-second auto-stop timer');
     setTimeout(() => {
+      console.log('[useBluetooth] Auto-stop timer fired');
       if (stopScanRef.current) {
+        console.log('[useBluetooth] Auto-stopping scan after 30 seconds');
         stopScanRef.current();
         stopScanRef.current = null;
         setIsScanning(false);
         if (transferProgress.state === 'scanning') {
+          console.log('[useBluetooth] Resetting transfer progress to idle');
           setTransferProgress({ state: 'idle', currentChunk: 0, totalChunks: 0 });
         }
+      } else {
+        console.log('[useBluetooth] No active scan to stop (already stopped)');
       }
     }, 30000);
   }, [permissionsGranted, bluetoothState, requestPermissions, transferProgress.state]);
 
   // Stop scanning
   const stopScanningAction = useCallback(() => {
+    console.log('[useBluetooth] stopScanningAction() called');
     if (stopScanRef.current) {
+      console.log('[useBluetooth] Calling stop function from scanForDevices');
       stopScanRef.current();
       stopScanRef.current = null;
+    } else {
+      console.log('[useBluetooth] No active scan reference to stop');
     }
     stopScanning();
     setIsScanning(false);
     setTransferProgress({ state: 'idle', currentChunk: 0, totalChunks: 0 });
+    console.log('[useBluetooth] Scan stopped, state reset to idle');
   }, []);
 
   // Connect to a device and share locations

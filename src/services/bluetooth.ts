@@ -30,7 +30,11 @@ let bleManager: BleManager | null = null;
  */
 export function initBluetooth(): BleManager {
   if (!bleManager) {
+    console.log('[Bluetooth] Initializing BLE manager');
     bleManager = new BleManager();
+    console.log('[Bluetooth] BLE manager initialized successfully');
+  } else {
+    console.log('[Bluetooth] BLE manager already initialized');
   }
   return bleManager;
 }
@@ -59,16 +63,21 @@ export function getBleManager(): BleManager {
  * Request Bluetooth permissions (Android only)
  */
 export async function requestBluetoothPermissions(): Promise<boolean> {
+  console.log('[Bluetooth] Requesting permissions, platform:', Platform.OS);
+
   if (Platform.OS === 'ios') {
     // iOS permissions are handled through Info.plist
+    console.log('[Bluetooth] iOS platform - permissions handled via Info.plist');
     return true;
   }
 
   if (Platform.OS === 'android') {
     const apiLevel = Platform.Version;
+    console.log('[Bluetooth] Android API level:', apiLevel);
 
     if (apiLevel >= 31) {
       // Android 12+ requires BLUETOOTH_SCAN and BLUETOOTH_CONNECT
+      console.log('[Bluetooth] Android 12+ - requesting BLUETOOTH_SCAN, BLUETOOTH_CONNECT, BLUETOOTH_ADVERTISE, ACCESS_FINE_LOCATION');
       const results = await PermissionsAndroid.requestMultiple([
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
         PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -76,20 +85,27 @@ export async function requestBluetoothPermissions(): Promise<boolean> {
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
       ]);
 
-      return (
+      console.log('[Bluetooth] Permission results:', JSON.stringify(results, null, 2));
+
+      const granted =
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN] === 'granted' &&
         results[PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT] === 'granted' &&
-        results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === 'granted'
-      );
+        results[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] === 'granted';
+
+      console.log('[Bluetooth] All required permissions granted:', granted);
+      return granted;
     } else {
       // Android < 12 just needs location permission for BLE scanning
+      console.log('[Bluetooth] Android < 12 - requesting ACCESS_FINE_LOCATION only');
       const result = await PermissionsAndroid.request(
         PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
       );
+      console.log('[Bluetooth] Location permission result:', result);
       return result === 'granted';
     }
   }
 
+  console.log('[Bluetooth] Unknown platform, returning false');
   return false;
 }
 
@@ -99,7 +115,9 @@ export async function requestBluetoothPermissions(): Promise<boolean> {
 export async function getBluetoothState(): Promise<BluetoothState> {
   const manager = getBleManager();
   const state = await manager.state();
-  return mapBleState(state);
+  const mappedState = mapBleState(state);
+  console.log('[Bluetooth] Current state:', state, '-> mapped to:', mappedState);
+  return mappedState;
 }
 
 /**
@@ -108,12 +126,18 @@ export async function getBluetoothState(): Promise<BluetoothState> {
 export function onBluetoothStateChange(
   callback: (state: BluetoothState) => void
 ): () => void {
+  console.log('[Bluetooth] Subscribing to state changes');
   const manager = getBleManager();
   const subscription = manager.onStateChange((state) => {
-    callback(mapBleState(state));
+    const mappedState = mapBleState(state);
+    console.log('[Bluetooth] State changed:', state, '-> mapped to:', mappedState);
+    callback(mappedState);
   }, true);
 
-  return () => subscription.remove();
+  return () => {
+    console.log('[Bluetooth] Unsubscribing from state changes');
+    subscription.remove();
+  };
 }
 
 function mapBleState(state: State): BluetoothState {
@@ -145,28 +169,55 @@ export function scanForDevices(
   const manager = getBleManager();
   const discoveredIds = new Set<string>();
 
+  console.log('[Bluetooth] Starting device scan');
+  console.log('[Bluetooth] Scanning for service UUID:', FOG_SERVICE_UUID);
+  console.log('[Bluetooth] Scan options: allowDuplicates=false');
+
   manager.startDeviceScan(
     [FOG_SERVICE_UUID],
     { allowDuplicates: false },
     (error, device) => {
       if (error) {
+        console.error('[Bluetooth] Scan error:', error.message, 'errorCode:', error.errorCode, 'reason:', error.reason);
         onError(error);
         return;
       }
 
-      if (device && !discoveredIds.has(device.id)) {
-        discoveredIds.add(device.id);
-        onDeviceFound({
+      if (device) {
+        console.log('[Bluetooth] Device detected:', {
           id: device.id,
-          name: device.name || device.localName || 'Fog of War User',
+          name: device.name,
+          localName: device.localName,
           rssi: device.rssi,
+          isConnectable: device.isConnectable,
+          serviceUUIDs: device.serviceUUIDs,
+          manufacturerData: device.manufacturerData,
         });
+
+        if (!discoveredIds.has(device.id)) {
+          console.log('[Bluetooth] New device discovered (not seen before):', device.id);
+          discoveredIds.add(device.id);
+          const discoveredDevice: DiscoveredDevice = {
+            id: device.id,
+            name: device.name || device.localName || 'Fog of War User',
+            rssi: device.rssi,
+          };
+          console.log('[Bluetooth] Reporting discovered device:', discoveredDevice);
+          onDeviceFound(discoveredDevice);
+        } else {
+          console.log('[Bluetooth] Device already discovered, skipping:', device.id);
+        }
       }
     }
   );
 
+  console.log('[Bluetooth] Scan started, returning stop function');
+
   return () => {
+    console.log('[Bluetooth] Stopping device scan');
+    console.log('[Bluetooth] Total unique devices found:', discoveredIds.size);
     manager.stopDeviceScan();
+    console.log('[Bluetooth] Device scan stopped');
   };
 }
 
@@ -174,8 +225,10 @@ export function scanForDevices(
  * Stop scanning for devices
  */
 export function stopScanning(): void {
+  console.log('[Bluetooth] stopScanning() called');
   const manager = getBleManager();
   manager.stopDeviceScan();
+  console.log('[Bluetooth] Scan stopped via stopScanning()');
 }
 
 /**
